@@ -180,7 +180,7 @@ def get_parser(**parser_kwargs):
         "-l",
         "--logdir",
         type=str,
-        default="/export/scratch/ru89tew/logs",
+        default="/export/compvis-nfs/user/rbarlog/logs",
         help="directory for logging dat shit",
     )
     parser.add_argument(

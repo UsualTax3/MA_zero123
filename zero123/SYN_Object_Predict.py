@@ -36,8 +36,8 @@ models = {}
 # Function to load and initialize models
 def load_and_initialize_models():
     global models
-    ckpt_path = "/export/scratch/ru89tew/105000.ckpt"
-    #ckpt_path = "./105000.ckpt"
+    ckpt_path = "/export/compvis-nfs/user/rbarlog/logs/2024-08-08T21-51-19_sd-objaverse-finetune-c_concat-256/checkpoints/epoch=000000-v1.ckpt"
+    #ckpt_path = "/export/scratch/ru89tew/105000.ckpt"
     config_path = "configs/sd-objaverse-finetune-c_concat-256.yaml"
     config = OmegaConf.load(config_path)
 

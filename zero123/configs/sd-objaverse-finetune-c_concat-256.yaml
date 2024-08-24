@@ -1,11 +1,11 @@
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 1.0e-05
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
-    log_every_t: 200
+    log_every_t: 5000
     timesteps: 1000
     first_stage_key: "image_target"
     cond_stage_key: "image_cond"
@@ -69,21 +69,15 @@ model:
 
 
 data:
-  target: ldm.data.simple.ObjaverseDataModuleFromConfig
+  target: ldm.data.simple.WebDataModuleFromConfig
   params:
-    root_dir: '/export/scratch/ru89tew/views_release'
-    batch_size: 64
-    num_workers: 8
-    total_view: 12
-    train:
-      validation: False
-      image_transforms:
-        size: 256
-        
-    validation:
-      validation: True
-      image_transforms:
-        size: 256
+    tar_base: "/export/compvis-nfs/group/datasets/obja_shards/shards"
+    batch_size: 8
+    num_workers: 16
+    train: 
+        shards: 'train-{000000..000823}.tar' 
+        shuffle: 1000
+    assemble_frames: True
 
 lightning:
   find_unused_parameters: false

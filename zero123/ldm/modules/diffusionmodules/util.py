@@ -116,36 +116,147 @@ def checkpoint(func, inputs, params, flag):
         return func(*inputs)
 
 
+# class CheckpointFunction(torch.autograd.Function):
+    # @staticmethod
+    # def forward(ctx, run_function, length, *args):
+        # ctx.run_function = run_function
+        # ctx.input_tensors = list(args[:length])
+        # ctx.input_params = list(args[length:])
+
+        # with torch.no_grad():
+            # output_tensors = ctx.run_function(*ctx.input_tensors)
+        # return output_tensors
+
+    # @staticmethod
+    # def backward(ctx, *output_grads):
+        # ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
+        
+        # Print tensors that require gradients just before calculating gradients
+        # print("Tensors that require gradients before grad calculation:")
+        # for i, tensor in enumerate(ctx.input_tensors + ctx.input_params):
+            # if tensor.requires_grad:
+                # print(f"Tensor {i}: Shape {tensor.shape}")
+                
+        # with torch.enable_grad():
+            # Fixes a bug where the first op in run_function modifies the
+            # Tensor storage in place, which is not allowed for detach()'d
+            # Tensors.
+            # shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+            # output_tensors = ctx.run_function(*shallow_copies)
+        # input_grads = torch.autograd.grad(
+            # output_tensors,
+            # ctx.input_tensors + ctx.input_params,
+            # output_grads,
+            # allow_unused=True,
+        # )
+        
+        #print("Tensors that require gradients before grad calculation:")
+        #for i, tensor in enumerate(ctx.input_tensors + ctx.input_params):
+            #if tensor.requires_grad:
+                #print(f"Tensor {i}: Shape {tensor.shape}")
+
+        # print("Tensors that had their gradients updated:")
+        # for i, (tensor, grad) in enumerate(zip(ctx.input_tensors + ctx.input_params, input_grads)):
+            # if tensor.requires_grad and grad is not None:
+                # print(f"Tensor {i}: Shape {tensor.shape}, Gradient Non-None")
+                
+        # del ctx.input_tensors
+        # del ctx.input_params
+        # del output_tensors
+        # return (None, None) + input_grads
+
+# class CheckpointFunction(torch.autograd.Function):
+    # @staticmethod
+    # def forward(ctx, run_function, length, *args):
+        # ctx.run_function = run_function
+        # ctx.input_tensors = list(args[:length])
+        # ctx.input_params = list(args[length:])
+        # with torch.no_grad():
+            # output_tensors = ctx.run_function(*ctx.input_tensors)
+        # return output_tensors
+
+    # @staticmethod
+    # def backward(ctx, *output_grads):
+        # ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
+        # with torch.enable_grad():
+            # shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+            # output_tensors = ctx.run_function(*shallow_copies)
+        
+        #Wrap the gradient computation in a try-except to catch errors
+        # try:
+            # input_grads = torch.autograd.grad(
+                # output_tensors,
+                # ctx.input_tensors + ctx.input_params,
+                # output_grads,
+                # allow_unused=True,
+            # )
+        # except RuntimeError as e:
+            # print("Error during gradient computation:")
+            # print(e)
+            #Inspect each parameter to see if gradients are expected but missing
+            # for tensor in ctx.input_tensors + ctx.input_params:
+                # print(f"Tensor requires grad: {tensor.requires_grad}, has grad: {tensor.grad is not None}")
+            # raise 
+
+        # del ctx.input_tensors
+        # del ctx.input_params
+        # del output_tensors
+        # return (None, None) + input_grads
+        
 class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, run_function, length, *args):
         ctx.run_function = run_function
-        ctx.input_tensors = list(args[:length])
-        ctx.input_params = list(args[length:])
-
+        ctx.save_for_backward(*args)
+        ctx.length = length
         with torch.no_grad():
-            output_tensors = ctx.run_function(*ctx.input_tensors)
+            output_tensors = ctx.run_function(*args[:length])
         return output_tensors
 
     @staticmethod
     def backward(ctx, *output_grads):
-        ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
+        inputs = ctx.saved_tensors
+        input_tensors = list(inputs[:ctx.length])
+        input_params = list(inputs[ctx.length:])
+
+        # # Filter tensors that require grad and print them
+        requires_grad_tensors = [x for x in input_tensors if x.requires_grad]
+        requires_grad_params = [x for x in input_params if x.requires_grad]
+        
+        #print(requires_grad_params)
+            
+        #for i, tensor in enumerate(requires_grad_tensors + requires_grad_params):
+            #print(f"Tensor {i}: requires_grad={tensor.requires_grad}, shape={tensor.shape}")
+
+        input_tensors_with_grad = [x.detach().requires_grad_(True) for x in requires_grad_tensors]
         with torch.enable_grad():
-            # Fixes a bug where the first op in run_function modifies the
-            # Tensor storage in place, which is not allowed for detach()'d
-            # Tensors.
-            shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+            shallow_copies = [x.view_as(x) for x in input_tensors_with_grad]
             output_tensors = ctx.run_function(*shallow_copies)
-        input_grads = torch.autograd.grad(
-            output_tensors,
-            ctx.input_tensors + ctx.input_params,
-            output_grads,
-            allow_unused=True,
-        )
-        del ctx.input_tensors
-        del ctx.input_params
-        del output_tensors
-        return (None, None) + input_grads
+
+        grads = torch.autograd.grad(output_tensors, requires_grad_tensors + requires_grad_params, output_grads, allow_unused=True)
+
+        #Convert grads to a list for easier manipulation
+        grads_list = list(grads)
+
+        #Print whether each tensor has gradients after backward
+        #for i, tensor in enumerate(requires_grad_tensors + requires_grad_params):
+            #has_grad = grads_list[i] is not None
+            #print(f"Tensor {i}: has_grad={has_grad}") 
+            
+        #print("Tensors that had their gradients updated:")
+        #for i, (tensor, grad) in enumerate(zip(requires_grad_tensors + requires_grad_params, grads_list)):
+            #if tensor.requires_grad and grad is not None:
+                #print(f"Tensor {i}: Shape {tensor.shape}, Gradient Non-None")
+
+        #Construct the return tuple, placing None for tensors that do not require grad
+        result_grads = []
+        for x in (input_tensors + input_params):
+            if x.requires_grad:
+                result_grads.append(grads_list.pop(0))
+            else:
+                result_grads.append(None)
+
+        return (None, None) + tuple(result_grads)
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):

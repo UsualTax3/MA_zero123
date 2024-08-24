@@ -7,6 +7,7 @@ from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
 
+import loralib as lora
 
 def exists(val):
     return val is not None
@@ -31,8 +32,7 @@ def init_(tensor):
     std = 1 / math.sqrt(dim)
     tensor.uniform_(-std, std)
     return tensor
-
-
+    
 # feedforward
 class GEGLU(nn.Module):
     def __init__(self, dim_in, dim_out):
@@ -148,50 +148,120 @@ class SpatialSelfAttention(nn.Module):
 
         return x+h_
 
+########################################################################################
+# class CrossAttention(nn.Module):
+    # def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.):
+        # super().__init__()
+        # inner_dim = dim_head * heads
+        # context_dim = default(context_dim, query_dim)
+
+        # self.scale = dim_head ** -0.5
+        # self.heads = heads
+
+        # self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
+        # self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        # self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+
+        # self.to_out = nn.Sequential(
+            # nn.Linear(inner_dim, query_dim),
+            # nn.Dropout(dropout)
+        # )
+
+    # def forward(self, x, context=None, mask=None):
+        # h = self.heads
+
+        # q = self.to_q(x)
+        # context = default(context, x)
+        # k = self.to_k(context)
+        # v = self.to_v(context)
+
+        # q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+
+        # sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+
+        # if exists(mask):
+            # mask = rearrange(mask, 'b ... -> b (...)')
+            # max_neg_value = -torch.finfo(sim.dtype).max
+            # mask = repeat(mask, 'b j -> (b h) () j', h=h)
+            # sim.masked_fill_(~mask, max_neg_value)
+
+        # attn = sim.softmax(dim=-1)
+
+        # out = einsum('b i j, b j d -> b i d', attn, v)
+        # out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        # return self.to_out(out)
 
 class CrossAttention(nn.Module):
     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
-        context_dim = default(context_dim, query_dim)
+        context_dim = context_dim if context_dim is not None else query_dim
 
         self.scale = dim_head ** -0.5
         self.heads = heads
-
-        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
-        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+        
+        self.to_q = lora.Linear(query_dim, inner_dim, bias=False, r=4)
+        self.to_k = lora.Linear(context_dim, inner_dim, bias=False, r=4)
+        self.to_v = lora.Linear(context_dim, inner_dim, bias=False, r=4) 
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
+    
+    #Define print_grad as a static method
+    @staticmethod
+    def print_grad(grad):
+        print(grad)
 
     def forward(self, x, context=None, mask=None):
+        #print(f"x shape: {x.shape}")
         h = self.heads
 
         q = self.to_q(x)
         context = default(context, x)
+        #print(f"context shape: {context.shape}")
         k = self.to_k(context)
         v = self.to_v(context)
+        
+        #print("q requires_grad:", q.requires_grad)
+        #print("k requires_grad:", k.requires_grad)
+        #print("v requires_grad:", v.requires_grad)
+
+        #Use the class name to call the static method
+        #if q.requires_grad:
+            #print("q.requires_grad")
+            #q.register_hook(print_grad)
+        #if k.requires_grad:
+            #print("k.requires_grad")
+            #k.register_hook(print_grad)
+        #if v.requires_grad:
+            #print("v.requires_grad")
+            #v.register_hook(print_grad)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
 
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
 
-        if exists(mask):
+        if mask is not None:
             mask = rearrange(mask, 'b ... -> b (...)')
             max_neg_value = -torch.finfo(sim.dtype).max
             mask = repeat(mask, 'b j -> (b h) () j', h=h)
             sim.masked_fill_(~mask, max_neg_value)
 
-        # attention, what we cannot get enough of
         attn = sim.softmax(dim=-1)
 
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
-        return self.to_out(out)
 
+        #out.register_hook(CrossAttention.print_grad)
+        
+        out = self.to_out(out)
+
+        return out
+
+
+#################################################################################
 
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True,

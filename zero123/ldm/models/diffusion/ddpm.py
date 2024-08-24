@@ -8,6 +8,7 @@ https://github.com/CompVis/taming-transformers
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
@@ -19,6 +20,8 @@ from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from omegaconf import ListConfig
+import torchvision.models as models
+import matplotlib.pyplot as plt
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -45,7 +48,74 @@ def disabled_train(self, mode=True):
 def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
 
+class PerceptualLoss(nn.Module):
+    def __init__(self, resize=True):
+        super(PerceptualLoss, self).__init__()
+        self.vgg = models.vgg16(pretrained=True).features
+        self.vgg = self.vgg.eval()
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+        self.resize = resize
 
+    def forward(self, img1, img2):
+        device = img1.device
+        self.vgg = self.vgg.to(device)
+        if self.resize:
+            img1 = F.interpolate(img1, mode='bilinear', size=(224, 224), align_corners=False)
+            img2 = F.interpolate(img2, mode='bilinear', size=(224, 224), align_corners=False)
+        features1 = self.get_features(img1)
+        features2 = self.get_features(img2)
+        perceptual_loss = sum(F.mse_loss(f1, f2) for f1, f2 in zip(features1, features2))
+        return perceptual_loss
+
+    def get_features(self, x):
+        features = []
+        for name, layer in self.vgg._modules.items():
+            x = layer(x)
+            if name in {'3', '8', '15', '22'}:
+                features.append(x)
+        return features
+
+class ColorConsistencyLoss(nn.Module):
+    def __init__(self, num_bins=50):
+        super(ColorConsistencyLoss, self).__init__()
+        self.num_bins = num_bins
+
+    def forward(self, img1, img2):
+        device = img1.device
+        hist1 = self.compute_histogram(img1)
+        hist2 = self.compute_histogram(img2)
+        return F.mse_loss(hist1, hist2)
+
+    def compute_histogram(self, img):
+        batch_size, channels, height, width = img.size()
+        histograms = []
+        for i in range(batch_size):
+            hist = []
+            for c in range(channels):
+                hist_channel = torch.histc(img[i, c], bins=self.num_bins, min=0, max=1)
+                hist.append(hist_channel)
+            histograms.append(torch.cat(hist))
+        return torch.stack(histograms)
+
+class CombinedLoss(nn.Module):
+    def __init__(self, resize=True):
+        super(CombinedLoss, self).__init__()
+        self.perceptual_loss = PerceptualLoss(resize)
+        self.color_consistency_loss = ColorConsistencyLoss()
+
+    def forward(self, img1, img2):
+        device = img1.device
+        perceptual_loss = self.perceptual_loss(img1.to(device), img2.to(device))
+        color_loss = self.color_consistency_loss(img1.to(device), img2.to(device))
+        total_loss = perceptual_loss + color_loss
+        return total_loss, {
+            "perceptual_loss": perceptual_loss,
+            "color_loss": color_loss,
+            "total_loss": total_loss
+        }
+
+        
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
@@ -91,6 +161,7 @@ class DDPM(pl.LightningModule):
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
         self.model = DiffusionWrapper(unet_config, conditioning_key)
+        self.perceptual_loss = PerceptualLoss()
         count_params(self.model, verbose=True)
         self.use_ema = use_ema
         if self.use_ema:
@@ -354,7 +425,7 @@ class DDPM(pl.LightningModule):
         elif self.parameterization == "x0":
             target = x_start
         else:
-            raise NotImplementedError(f"Paramterization {self.parameterization} not yet supported")
+            raise NotImplementedError(f"Parameterization {self.parameterization} not yet supported")
 
         loss = self.get_loss(model_out, target, mean=False).mean(dim=[1, 2, 3])
 
@@ -366,11 +437,22 @@ class DDPM(pl.LightningModule):
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
         loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb})
 
-        loss = loss_simple + self.original_elbo_weight * loss_vlb
+        # Compute perceptual loss between the reconstructed and original images
+        if self.parameterization == "eps":
+            x_reconstructed = self.predict_start_from_noise(x_noisy, t, model_out)
+        elif self.parameterization == "x0":
+            x_reconstructed = model_out
 
-        loss_dict.update({f'{log_prefix}/loss': loss})
+        perceptual_loss = self.perceptual_loss(x_reconstructed, x_start)
+        print("Perceptual Loss")
+        print(perceptual_loss)
+        loss_dict.update({f'{log_prefix}/perceptual_loss': perceptual_loss})
 
-        return loss, loss_dict
+        total_loss = loss_simple + self.original_elbo_weight * loss_vlb + self.perceptual_weight * perceptual_loss
+
+        loss_dict.update({f'{log_prefix}/loss': total_loss})
+
+        return total_loss, loss_dict
 
     def forward(self, x, *args, **kwargs):
         # b, c, h, w, device, img_size, = *x.shape, x.device, self.image_size
@@ -410,9 +492,13 @@ class DDPM(pl.LightningModule):
             
             #graph = make_dot(loss, params=dict(list(self.named_parameters())))
             #graph.render(r"C:\Users\Admin\OneDrive\Pulpit\MA_Zero123_NEW\zero123\zero123\ldm\models\diffusion\training_step_graph_{}".format(batch_idx), format="png", cleanup=True)
+            
+        # Log each loss separately
+        for key, value in loss_dict.items():
+            self.log(key, value, prog_bar=True, logger=True, on_step=True, on_epoch=True)
 
-        self.log_dict(loss_dict, prog_bar=True,
-                      logger=True, on_step=True, on_epoch=True)
+        #self.log_dict(loss_dict, prog_bar=True,
+                      #logger=True, on_step=True, on_epoch=True)
 
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
@@ -531,6 +617,8 @@ class LatentDiffusion(DDPM):
         self.instantiate_first_stage(first_stage_config)
         self.instantiate_cond_stage(cond_stage_config)
         self.cond_stage_forward = cond_stage_forward
+        
+        self.perceptual_loss = PerceptualLoss()
 
         # construct linear projection layer for concatenating image CLIP embedding and RT
         self.cc_projection = nn.Linear(772, 768)
@@ -545,7 +633,7 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
-
+        
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
@@ -1010,7 +1098,7 @@ class LatentDiffusion(DDPM):
         qt_mean, _, qt_log_variance = self.q_mean_variance(x_start, t)
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
-
+        
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -1031,7 +1119,6 @@ class LatentDiffusion(DDPM):
 
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
             loss_dict.update({'logvar': self.logvar.data.mean()})
@@ -1044,7 +1131,22 @@ class LatentDiffusion(DDPM):
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
 
+        x_reconstructed = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
+
+        if x_start.shape[1] == 4:
+            x_start = self.decode_first_stage(x_start)
+
+        if x_reconstructed.shape[1] == 4: 
+            x_reconstructed = self.decode_first_stage(x_reconstructed)
+
+        combined_loss = CombinedLoss().to(self.device)
+        total_loss, combined_loss_dict = combined_loss(x_reconstructed, x_start)
+        loss += total_loss
+        loss_dict.update({f'{prefix}/perceptual_loss': combined_loss_dict["perceptual_loss"]})
+        loss_dict.update({f'{prefix}/color_loss': combined_loss_dict["color_loss"]})
+
         return loss, loss_dict
+
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

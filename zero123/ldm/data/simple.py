@@ -201,7 +201,6 @@ def load_im_from_array(img_array, color):
     img = Image.fromarray(np.uint8(img_array * 255.0))
     return img
 
-# Function to assemble frames
 def assemble_frames(sample):
     data = {}
     total_view = 12
@@ -237,7 +236,6 @@ def assemble_frames(sample):
         target_im = transform(target_im)
         cond_im = transform(cond_im)
 
-        # Apply custom transformations (if needed)
         target_im = custom_transform(target_im)
         cond_im = custom_transform(cond_im)
         
@@ -254,7 +252,6 @@ def assemble_frames(sample):
 
     return data
 
-# Function to calculate transformation T
 def get_T(target_RT, cond_RT):
     R, T = target_RT[:3, :3], target_RT[:, -1]
     T_target = -R.T @ T
@@ -272,7 +269,6 @@ def get_T(target_RT, cond_RT):
     d_T = torch.tensor([d_theta.item(), np.sin(d_azimuth.item()), np.cos(d_azimuth.item()), d_z.item()])
     return d_T
 
-# Function to convert Cartesian coordinates to spherical coordinates
 def cartesian_to_spherical(xyz):
     xy = xyz[:, 0]**2 + xyz[:, 1]**2
     z = np.sqrt(xy + xyz[:, 2]**2)
@@ -280,7 +276,6 @@ def cartesian_to_spherical(xyz):
     azimuth = np.arctan2(xyz[:, 1], xyz[:, 0])
     return np.array([theta, azimuth, z])
 
-# Data module class for configuration
 class WebDataModuleFromConfig(pl.LightningDataModule):
     def __init__(self, tar_base, batch_size, train=None, validation=None, test=None, num_workers=4, multinode=True, val_batch_size=None, assemble_frames=True, **kwargs) -> None:
         super().__init__()
@@ -387,7 +382,6 @@ class FolderData(Dataset):
         if not isinstance(ext, (tuple, list, ListConfig)):
             ext = [ext]
 
-        # Only used if there is no caption file
         self.paths = []
         for e in ext:
             self.paths.extend(sorted(list(self.root_dir.rglob(f"*.{e}"))))

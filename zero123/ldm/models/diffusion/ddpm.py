@@ -98,23 +98,62 @@ class ColorConsistencyLoss(nn.Module):
             histograms.append(torch.cat(hist))
         return torch.stack(histograms)
 
+import torchvision.transforms as T
+
+class DepthConsistencyLoss(nn.Module):
+    def __init__(self, model_type="metric3d_convnext_tiny", device='cuda'):
+        super(DepthConsistencyLoss, self).__init__()
+        self.device = device
+
+        local_path = "/export/compvis-nfs/user/rbarlog/zero123/zero123/Metric3D"
+
+        self.depth_estimator = torch.hub.load(
+            repo_or_dir=local_path,
+            model=model_type,
+            source='local'  
+        ).to(self.device).eval()
+
+        self.transform = T.Compose([
+            T.Resize((256, 256)), 
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225]),
+        ])
+
+        for param in self.depth_estimator.parameters():
+            param.requires_grad = False
+
+    def forward(self, img1, img2):
+        img1 = self.transform(img1).to(self.device)
+        img2 = self.transform(img2).to(self.device)
+
+        self.depth_estimator = self.depth_estimator.to(self.device)
+
+        with torch.no_grad():
+            depth1, _, _ = self.depth_estimator.inference({'input': img1})
+            depth2, _, _ = self.depth_estimator.inference({'input': img2})
+
+        return F.mse_loss(depth1, depth2)
+
+        
 class CombinedLoss(nn.Module):
     def __init__(self, resize=True):
         super(CombinedLoss, self).__init__()
-        self.perceptual_loss = PerceptualLoss(resize)
-        self.color_consistency_loss = ColorConsistencyLoss()
+        #self.perceptual_loss = PerceptualLoss(resize)
+        #self.color_consistency_loss = ColorConsistencyLoss()
+        self.depth_consistency_loss = DepthConsistencyLoss()
 
     def forward(self, img1, img2):
         device = img1.device
-        perceptual_loss = self.perceptual_loss(img1.to(device), img2.to(device))
-        color_loss = self.color_consistency_loss(img1.to(device), img2.to(device))
-        total_loss = perceptual_loss + color_loss
-        return total_loss, {
-            "perceptual_loss": perceptual_loss,
-            "color_loss": color_loss,
-            "total_loss": total_loss
+        #perceptual_loss = self.perceptual_loss(img1.to(device), img2.to(device))
+        #color_loss = self.color_consistency_loss(img1.to(device), img2.to(device))
+        depth_loss = self.depth_consistency_loss(img1.to(device), img2.to(device))
+        
+        return depth_loss, {
+            #"perceptual_loss": perceptual_loss,
+            #"color_loss": color_loss,
+            "depth_loss": depth_loss,
+            #"total_loss": total_loss
         }
-
         
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -1140,10 +1179,9 @@ class LatentDiffusion(DDPM):
             x_reconstructed = self.decode_first_stage(x_reconstructed)
 
         combined_loss = CombinedLoss().to(self.device)
-        total_loss, combined_loss_dict = combined_loss(x_reconstructed, x_start)
-        loss += total_loss
-        loss_dict.update({f'{prefix}/perceptual_loss': combined_loss_dict["perceptual_loss"]})
-        loss_dict.update({f'{prefix}/color_loss': combined_loss_dict["color_loss"]})
+        _, combined_loss_dict = combined_loss(x_reconstructed, x_start)
+        loss += combined_loss_dict["depth_loss"]
+        loss_dict.update({f'{prefix}/depth_loss': combined_loss_dict["depth_loss"]})
 
         return loss, loss_dict
 

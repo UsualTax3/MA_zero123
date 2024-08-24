@@ -115,23 +115,19 @@ class DepthConsistencyLoss(nn.Module):
             pretrain=True
         ).to(self.device).eval()
 
-        # Define the transform
         self.transform = T.Compose([
             T.Resize((256, 256)),
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
     def forward(self, img1, img2):
-        # Ensure both images are processed on the GPU
         img1 = self.transform(img1).to(self.device)
         img2 = self.transform(img2).to(self.device)
 
         with torch.no_grad():
-            # Perform depth estimation on both images
             depth1, _, _ = self.depth_estimator.inference({'input': img1})
             depth2, _, _ = self.depth_estimator.inference({'input': img2})
 
-        # Return the MSE loss between the depth predictions of both images
         return F.mse_loss(depth1, depth2)
 
         

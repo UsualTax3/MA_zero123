@@ -1,6 +1,9 @@
 # Fine-Tuning Diffusion Models for Novel View Synthesis
 
-This repository contains the code and instructions associated with the Master's Thesis submitted to the **Computer Vision & Learning Group (CompVis)**, Faculty of Mathematics, Computer Science, and Statistics, Ludwig Maximilian University of Munich (LMU).
+This repository contains the code and instructions associated with the Master's Thesis 
+**Computer Vision & Learning Group (CompVis)**
+Faculty of Mathematics, Computer Science, and Statistics
+Ludwig Maximilian University of Munich (LMU).
 
 ## Overview
 

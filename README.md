@@ -39,21 +39,21 @@ To evaluate the model on the **Google Scanned Objects (GSO)** dataset, follow th
 
 1. **Run the prediction pipeline:**
 
-   \`\`\`bash
+   ```bash
    python SYN_Object_Predict_Pipeline.py
-   \`\`\`
+   ```
 
 2. **Evaluate using perceptual metrics:**
 
-   \`\`\`bash
+   ```bash
    python evaluate_perceptualism.py
-   \`\`\`
+   ```
 
 3. **Obtain the FID score:**
 
-   \`\`\`bash
+   ```bash
    python -m pytorch_fid original generated
-   \`\`\`
+   ```
 
 ## Evaluation on CO3D Dataset
 
@@ -61,21 +61,21 @@ To evaluate the model on the **CO3D** dataset, proceed with the following steps:
 
 1. **Run the object prediction pipeline:**
 
-   \`\`\`bash
+   ````bash
    python Predict_Object.py
-   \`\`\`
+   ```
 
 2. **Evaluate using perceptual metrics:**
 
-   \`\`\`bash
+   ```bash
    python CO3D_evaluate_perceptualism.py
-   \`\`\`
+   ```
 
 3. **Obtain the FID score:**
 
-   \`\`\`bash
+   ```bash
    python -m pytorch_fid original generated
-   \`\`\`
+   ```
 
 ## Acknowledgments
 

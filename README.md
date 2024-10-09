@@ -9,7 +9,22 @@ This repository contains the code and instructions associated with the Master's 
 
 ## Training Instructions
 
-To train the model using the provided configuration, run the following command:
+To train the model using the provided configuration:
+1. Download the Stable Diffuion checkpoint:
+   
+```bash wget https://cv.cs.columbia.edu/zero123/assets/sd-image-conditioned-v2.ckpt ```
+
+2.Download the Objaverse dataset:
+```bash wget https://tri-ml-public.s3.amazonaws.com/datasets/views_release.tar.gz ```
+
+3. Create a sharded dataset:
+   ```bash
+   python shard_creation.py
+   ```
+
+4. Download and unzip valid_paths.json.zip which is contained in [Zero-1-to-3](https://github.com/cvlab-columbia/zero123). Then place the the valid_paths.json file in the view_release folder.
+  
+5. Run the following command:
 
 ```bash
 python main.py -t \\
@@ -61,7 +76,7 @@ To evaluate the model on the **CO3D** dataset, proceed with the following steps:
 
 1. **Run the object prediction pipeline:**
 
-   ````bash
+   ```bash
    python Predict_Object.py
    ```
 

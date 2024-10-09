@@ -14,7 +14,7 @@ To train the model using the provided configuration:
    
 ``` wget https://cv.cs.columbia.edu/zero123/assets/sd-image-conditioned-v2.ckpt ```
 
-2.Download the Objaverse dataset:
+2. Download the Objaverse dataset:
 
 ``` wget https://tri-ml-public.s3.amazonaws.com/datasets/views_release.tar.gz ```
 

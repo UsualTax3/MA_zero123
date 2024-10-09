@@ -14,7 +14,7 @@ model:
     cond_stage_trainable: false   # Note: different from the one we trained before
     conditioning_key: hybrid
     scale_factor: 0.18215
-    unet_trainable: "all"
+    unet_trainable: "attn"
 
     scheduler_config: # 10000 warmup steps
       target: ldm.lr_scheduler.LambdaLinearScheduler
@@ -69,27 +69,33 @@ model:
 
 
 data:
-  target: ldm.data.simple.WebDataModuleFromConfig
+  target: ldm.data.simple.ObjaverseDataModuleFromConfig
   params:
-    tar_base: "/export/compvis-nfs/group/datasets/obja_shards/shards"
-    batch_size: 8
+    root_dir: '/export/compvis-nfs/group/datasets/views_release'
+    batch_size: 64
     num_workers: 16
-    train: 
-        shards: 'train-{000000..000823}.tar' 
-        shuffle: 1000
-    assemble_frames: True
+    total_view: 12
+    train:
+      validation: False
+      image_transforms:
+        size: 256
+        
+    validation:
+      validation: True
+      image_transforms:
+        size: 256
 
 lightning:
   find_unused_parameters: false
   metrics_over_trainsteps_checkpoint: True
   modelcheckpoint:
     params:
-      every_n_train_steps: 50000
+      every_n_train_steps: 5000
   callbacks:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 50000
+        batch_frequency: 500
         max_images: 32
         increase_log_steps: False
         log_first_step: True

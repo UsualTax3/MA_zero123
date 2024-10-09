@@ -36,7 +36,7 @@ models = {}
 # Function to load and initialize models
 def load_and_initialize_models():
     global models
-    ckpt_path = "/export/compvis-nfs/user/rbarlog/logs/2024-10-01T02-17-24_sd-objaverse-finetune-c_concat-256/checkpoints/epoch=000000-v1.ckpt"
+    ckpt_path = "/export/compvis-nfs/user/rbarlog/logs/_NEW_Perceptual_Colour/checkpoints/epoch=000000-v1.ckpt"
     #ckpt_path = "/export/scratch/ru89tew/105000.ckpt"
     config_path = "configs/sd-objaverse-finetune-c_concat-256.yaml"
     config = OmegaConf.load(config_path)
@@ -116,36 +116,36 @@ def sample_model(input_im, model, sampler, precision, h, w,
                  elevation, azimuth, radius):
     precision_scope = autocast if precision == 'autocast' else nullcontext
     
-    # Convert both sets of azimuth and elevation to radians
+    #Convert both sets of azimuth and elevation to radians
     azimuth_rad_first = np.deg2rad(azimuth_first % 360)
     elevation_rad_first = np.deg2rad(np.clip(elevation_first, -5, 5))
     azimuth_rad = np.deg2rad(azimuth % 360)
     elevation_rad = np.deg2rad(np.clip(elevation, -5, 5))
 
-    # Calculate relative transformations between the two viewpoints
+    #Calculate relative transformations between the two viewpoints
     delta_azimuth = (azimuth_rad_first - azimuth_rad + np.pi) % (2 * np.pi) - np.pi
     delta_elevation = elevation_rad_first - elevation_rad
     #delta_elevation = np.clip(delta_elevation, -np.pi/2, np.pi/2)
     
     print(f"Delta azimuth (rad): {delta_azimuth}, Delta elevation (rad): {delta_elevation}")
 
-    # Normalize the radius as per the interval [1.5, 2.2] and calculate the difference
+    #Normalize the radius as per the interval [1.5, 2.2] and calculate the difference
     normalized_radius_first = (radius_first - 1.5) / (2.2 - 1.5)
     normalized_radius = (radius - 1.5) / (2.2 - 1.5)
     delta_radius = normalized_radius_first - normalized_radius
 
     print(f"Normalized initial radius: {normalized_radius_first}, Normalized current radius: {normalized_radius}, Delta radius: {delta_radius}")
 
-    # Calculate and adjust the normalized delta radius
+   # Calculate and adjust the normalized delta radius
     normalized_delta_radius = delta_radius / (2.2 - 1.5)
     adjusted_normalized_radius = np.clip(normalized_radius_first + normalized_delta_radius, 0, 1)
     adjusted_radius = adjusted_normalized_radius * (2.2 - 1.5) + 1.5
     adjusted_radius = np.clip(adjusted_radius, 1.5, 2.2)
     
-    print(delta_elevation)
-    print(delta_azimuth)
-    print(delta_radius)
-    print(adjusted_radius)
+    # print(delta_elevation)
+    # print(delta_azimuth)
+    # print(delta_radius)
+    # print(adjusted_radius)
     
     with precision_scope('cuda'):
         with model.ema_scope():
@@ -191,65 +191,44 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
-def preprocess_image(models, input_im, input_mask, preprocess=True):
-    # If input_im is a string (path), read the image using cv2.imread
-    if isinstance(input_im, str):
-        input_im = cv2.imread(input_im)
-    # If input_im is a PIL.Image object, convert it to a NumPy array
-    elif isinstance(input_im, Image.Image):
-        input_im = np.array(input_im)
-        # Assuming OpenCV will be used for further processing, convert RGB (PIL) to BGR (OpenCV)
-        input_im = cv2.cvtColor(input_im, cv2.COLOR_RGB2BGR)
-    
+def preprocess_image(models, input_im, preprocess):
+    '''
+    :param input_im (PIL Image).
+    :return input_im (H, W, 3) array in [0, 1].
+    '''
+
+    #print('old input_im:', input_im.size)
+    start_time = time.time()
+
     if preprocess:
-        # Load the mask and resize it to match the image size
-        if isinstance(input_mask, str):
-            mask = cv2.imread(input_mask, cv2.IMREAD_GRAYSCALE)
-            
-            plt.imshow(mask)
-            plt.axis('off')  # Hides the axis
-            plt.show()
-            
-            if mask is not None:
-                # Resize the mask to match the input image's dimensions
-                #mask_resized = cv2.resize(mask, (input_im.shape[1], input_im.shape[0]))
-                # Create a white background of the same size as input_im
-                
-                #mask_bool_target = mask_target > 128
-                #white_background_target = np.ones_like(image_target) * 255
-                #result_image_target = np.where(mask_bool_target[:, :, np.newaxis], image_target, white_background_target)
-                #target_im = cv2.cvtColor(result_image_target, cv2.COLOR_BGR2RGB)
-                
-                mask_bool_target = mask > 128
-                background = np.ones_like(input_im) * 255
-                # Apply the mask: keep input_im where mask is not zero, else background
-                input_im_masked = np.where(mask_bool_target[:, :, None] > 0, input_im, background)
-                
-                # Optional: Display the processed image
-                #plt.imshow(cv2.cvtColor(input_im_masked, cv2.COLOR_BGR2RGB))
-                #plt.axis('off')  # Hides the axis
-                #plt.show()
-                
-        # Resize the image after applying the mask to the target size
-        target_size = (256, 256)  # Desired output size
-        input_im_resized = cv2.resize(input_im_masked, target_size)
-
+        input_im = load_and_preprocess(models['carvekit'], input_im)
+        input_im = (input_im / 255.0).astype(np.float32)
+        # (H, W, 3) array in [0, 1].
     else:
-        # No preprocessing is to be done, input_im is returned as is
-        input_im_resized = input_im  # This line is modified to use the potentially unmodified input_im
+        input_im = input_im.resize([256, 256], Image.Resampling.LANCZOS)
+        input_im = np.asarray(input_im, dtype=np.float32) / 255.0
+        # (H, W, 4) array in [0, 1].
 
-    # Convert the NumPy array back to PIL.Image for consistency
-    #input_im_resized = cv2.cvtColor(input_im_resized, cv2.COLOR_BGR2RGB)  
-    #input_im_resized = Image.fromarray(input_im_resized.astype('uint8'))
-    
-    input_im_resized = cv2.cvtColor(input_im_resized, cv2.COLOR_BGR2RGB)  
-    input_im_resized = Image.fromarray(input_im_resized.astype('uint8'))
+        # old method: thresholding background, very important
+        # input_im[input_im[:, :, -1] <= 0.9] = [1., 1., 1., 1.]
 
-    return input_im_resized
+        # new method: apply correct method of compositing to avoid sudden transitions / thresholding
+        # (smoothly transition foreground to white background based on alpha values)
+        alpha = input_im[:, :, 3:4]
+        white_im = np.ones_like(input_im)
+        input_im = alpha * input_im + (1.0 - alpha) * white_im
+
+        input_im = input_im[:, :, 0:3]
+        # (H, W, 3) array in [0, 1].
+
+    print(f'Infer foreground mask (preprocess_image) took {time.time() - start_time:.3f}s.')
+    #print('new input_im:', lo(input_im))
+
+    return input_im
 
 
 def main_run(raw_im,
-             models, device, mask, elevation_first=0.0, azimuth_first=0.0, radius_first=0.0,
+             models, device, elevation_first=0.0, azimuth_first=0.0, radius_first=0.0,
              elevation=0.0, azimuth=0.0, radius=0.0,
              preprocess=True,
              scale=3.0, n_samples=1, ddim_steps=50, ddim_eta=1.0,
@@ -275,7 +254,7 @@ def main_run(raw_im,
     #else:
         #print('Safety check passed.')
 
-    input_im = preprocess_image(models, raw_im, mask, preprocess)
+    input_im = preprocess_image(models, raw_im, preprocess)
     input_tensor = transforms.ToTensor()(input_im).unsqueeze(0).to(device)
     input_tensor = input_tensor * 2 - 1
     input_tensor = transforms.functional.resize(input_tensor, [h, w])
@@ -286,7 +265,7 @@ def main_run(raw_im,
     lpips_model = lpips.LPIPS(net='alex').to(device)
 
     output_ims = []
-    #ssim_values = []  # List to store SSIM values
+    #ssim_values = []
     #lpips_values = []
     for x_sample in x_samples_ddim:
         x_sample = 255.0 * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
@@ -316,8 +295,7 @@ def predict(cond_image_path: str = "cond.png",
             elevation_in_degree: float = 0.0,
             azimuth_in_degree: float = 0.0,
             radius: float = 0.0,
-            output_image_path: str = "output_azimuth_90.png",
-            mask: str = "mask.png"):
+            output_image_path: str = "output_azimuth_90.png"):
     #device = f"cuda:{device_idx}"
     #config = OmegaConf.load(config)
 
@@ -337,37 +315,55 @@ def predict(cond_image_path: str = "cond.png",
     #models['clip_fe'] = AutoFeatureExtractor.from_pretrained(
         #'CompVis/stable-diffusion-safety-checker')
 
-    #cond_image = Image.open(cond_image_path)
+    cond_image = Image.open(cond_image_path)
 
-    preds_images = main_run(raw_im=cond_image_path,
+    preds_images = main_run(raw_im=cond_image,
                             models=models, device=device,
                             elevation_first=elevation_first_degree,
                             azimuth_first=azimuth_first_degree,
                             radius_first=radius_first,
                             elevation=elevation_in_degree,
                             azimuth=azimuth_in_degree,
-                            radius=radius,
-                            mask=mask)
+                            radius=radius)
 
     pred_image = preds_images[-1]
     pred_image.save(output_image_path)
 
 # Define the function to calculate azimuth and elevation from the rotation matrix
+# def calculate_azimuth_elevation(R):
+    # R = np.array([[r.item() for r in row] for row in R])  # Convert R from tensors to numpy array
+    # azimuth = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
+    # elevation = np.degrees(np.arcsin(-R[2, 0]))
+    # return azimuth, elevation
+    
 def calculate_azimuth_elevation(R):
-    R = np.array([[r.item() for r in row] for row in R])  # Convert R from tensors to numpy array
-    azimuth = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
-    elevation = np.degrees(np.arcsin(-R[2, 0]))
+    # Assuming R is already extracted as a 3x3 rotation matrix
+    sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+    singular = sy < 1e-6
+    if not singular:
+        x = np.arctan2(R[2, 1], R[2, 2])
+        y = np.arctan2(-R[2, 0], sy)
+    else:
+        x = np.arctan2(-R[1, 2], R[1, 1])
+        y = np.arctan2(-R[2, 0], sy)
+    azimuth = np.degrees(y)
+    elevation = np.degrees(x)
     return azimuth, elevation
     
+# def calculate_radius(T):
+    # """
+    # Calculate the radius from the translation vector.
+    # :param T: Translation vector (list or tensor with 3 elements [Tx, Ty, Tz])
+    # :return: Radius (float)
+    # """
+    ##Ensure T is a numpy array for calculation
+    # T = np.array([t.item() for t in T])
+    # radius = np.sqrt(np.sum(T**2))
+    # return radius
+    
 def calculate_radius(T):
-    """
-    Calculate the radius from the translation vector.
-    :param T: Translation vector (list or tensor with 3 elements [Tx, Ty, Tz])
-    :return: Radius (float)
-    """
-    # Ensure T is a numpy array for calculation
-    T = np.array([t.item() for t in T])
-    radius = np.sqrt(np.sum(T**2))
+    # Assuming T is already extracted as the translation vector
+    radius = np.linalg.norm(T)
     return radius
 
 # Define the function to print details for each sequence
@@ -382,19 +378,22 @@ def print_sequence_details(sequence_name, details):
             print(f"   Viewpoint: Azimuth={azimuth}°, Elevation={elevation}°")
         print()
         
-def calculate_metrics(generated_img_path, preprocessed_corresponding_img):
-    # Load the generated image
+def calculate_metrics(generated_img_path, preprocessed_corresponding_img_path):
+    # Load images from paths
     generated_img = Image.open(generated_img_path).convert('RGB')
+    corresponding_img = Image.open(preprocessed_corresponding_img_path).convert('RGB')
 
-    # Convert both images to tensors
+    # Define the transformation
     transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.ToTensor(),
     ])
+
+    # Apply transformation to the images
     generated_tensor = transform(generated_img).unsqueeze(0).to(device)
-    corresponding_tensor = transform(preprocessed_corresponding_img).unsqueeze(0).to(device)
+    corresponding_tensor = transform(corresponding_img).unsqueeze(0).to(device)
     
-    # Calculate SSIM and LPIPS
+    # Calculate SSIM and LPIPS (assuming functions for these calculations are defined)
     ssim_value = ssim(generated_tensor, corresponding_tensor).item()
     lpips_value = lpips_model(generated_tensor, corresponding_tensor).item()
     
@@ -457,110 +456,83 @@ class ChairDataset(Dataset):
             'annotation_view': annotation['viewpoint'],
             'annotation_mask': annotation['mask']
         }
-        
-if __name__ == "__main__":
+
+def load_images_and_npy(folder_path):
+    images = []
+    npy_data = []
+
+    # Iterate over the files in the folder
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith('.jpg') or file_name.endswith('.png'):
+            # Load and process the image
+            image_path = os.path.join(folder_path, file_name)
+            image = Image.open(image_path)
+            images.append(image)
+
+            # Assuming the corresponding .npy file has the same base name
+            npy_path = os.path.join(folder_path, os.path.splitext(file_name)[0] + '.npy')
+            if os.path.exists(npy_path):
+                data = np.load(npy_path)
+                npy_data.append(data)
+    
+    return images, npy_data
+
+def process_images_in_folders(folder_names):
     load_and_initialize_models()
     device = 'cuda'  # or 'cpu'
     inception_model = initialize_inception_v3(device=device)
-    dataset_root = 'co3d/CO3DV2_DATASET_ROOT/'
-    annotations_file = 'hydrant/frame_annotations.jgz'
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-    ])
 
-    chair_dataset = ChairDataset(dataset_root, annotations_file, transform=transform)
-    chair_dataloader = DataLoader(chair_dataset, batch_size=1, shuffle=False)
-
-    processed_sequences = set()
-    current_sequence = None
-    
     real_features_list = []
     generated_features_list = []
     
     ssim_values = []
     lpips_values = []
-
-    while len(processed_sequences) < 11:
-        first_frame_details = None
-        subsequent_frames = []
-
-        for batch in chair_dataloader:
-            sequence_name = batch['sequence_name'][0]
-            if sequence_name in processed_sequences:
-                print(f"Sequence {sequence_name} already processed, skipping.")
-                continue
-
-            frame_number = batch['frame_number'][0]
-            image_path = os.path.join(dataset_root, batch['annotation_image']['path'][0])
-            mask_path = os.path.join(dataset_root, batch['annotation_mask']['path'][0])
-            viewpoint = batch['annotation_view']
-
-            if current_sequence is None:
-                current_sequence = sequence_name
-                print(f"Starting new sequence processing: {sequence_name}")
-
-            if sequence_name != current_sequence:
-                print(f"Encountered a different sequence {sequence_name}, currently processing {current_sequence}. Skipping this batch.")
-                break
-
-            print(f"Processing sequence: {sequence_name}, Frame: {frame_number}")
-
-            if first_frame_details is None:
-                first_frame_details = {
-                    'frame_number': frame_number,
-                    'image_path': image_path,
-                    'viewpoint': viewpoint,
-                    'sequence_name': sequence_name
-                }
-                print(f"Set as first frame for sequence {sequence_name}")
-            else:
-                subsequent_frames.append({
-                    'frame_number': frame_number,
-                    'image_path': image_path,
-                    'viewpoint': viewpoint,
-                    'mask_path': mask_path
-                })
-                #real_features_list.append({
-                    #'image_path': image_path,
-                #})
-                print(f"Added frame {frame_number} to subsequent frames for sequence {sequence_name}")
-                #print(f"Added frame {frame_number} to REAL frames for sequence {sequence_name}")
-
-        processed_sequences.add(current_sequence)
-        print(f"Completed processing all frames for sequence: {current_sequence}.")
-        current_sequence = None  # Reset for the next sequence
-        print(first_frame_details['image_path'])
+    
+    for folder_name in folder_names:
+        folder_path = os.path.join('/export/compvis-nfs/user/rbarlog/zero123/zero123/Check/GSO', folder_name, 'render_mvs_25/', 'model/' )
+        if not os.path.exists(folder_path):
+            print(f"Folder {folder_path} does not exist. Skipping.")
+            continue
+        
+        images, npy_data = load_images_and_npy(folder_path)
+        
+        if not images or not npy_data:
+            print(f"No images or .npy data found in folder {folder_path}. Skipping.")
+            continue
+        
+        cond_img = images[0]
+        cond_ext = npy_data[0]
+        
+        images.pop(0)
+        npy_data.pop(0)
 
         # Evaluate the processed sequence
-        for frame_detail in subsequent_frames:
-            #print(frame_detail['image_path'])
-            print(f"First Frame {first_frame_details['image_path']}")
-            print(f"Current Frame {frame_detail['image_path']}")
+        for i, target_img in enumerate(images):
+            print(f"Processing image {i+1}/{len(images)} in folder {folder_name}")
             
-            azimuth_first, elevation_first = calculate_azimuth_elevation(first_frame_details['viewpoint']['R'])
-            radius_first = calculate_radius(first_frame_details['viewpoint']['T'])
+            RT_1 = cond_ext
+            R_1 = RT_1[:, :3]  # Rotation matrix
+            T_1 = RT_1[:, 3]   # Translation vector
             
-            azimuth, elevation = calculate_azimuth_elevation(frame_detail['viewpoint']['R'])
-            radius = calculate_radius(frame_detail['viewpoint']['T'])
+            azimuth_first, elevation_first = calculate_azimuth_elevation(R_1)
+            radius_first = calculate_radius(T_1)
 
-            print(f"Sequence: {sequence_name}, Conditional Frame: {first_frame_details['frame_number']}, Current Frame: {frame_detail['frame_number']}")
-            print(f"Azimuth: {azimuth}°, Elevation: {elevation}°, Radius: {radius} meters")
-            #print("frame_number:", first_frame_details.get('frame_number'))
+            # Load the corresponding RT matrix
+            RT = npy_data[i]
+            R = RT[:, :3]  # Rotation matrix
+            T = RT[:, 3]   # Translation vector
+
+            azimuth, elevation = calculate_azimuth_elevation(R)
+            radius = calculate_radius(T)
+
+            print(f"Image: {i+1} in folder {folder_name}")
+            print(f"Azimuth: {azimuth}, Elevation: {elevation}, Radius: {radius}")
             
-            hardcode = first_frame_details['sequence_name']
-            #target_mask = os.path.join("co3d", "CO3DV2_DATASET_ROOT", "hydrant", hardcode, "masks", f"frame000{:03d}.png")
-            target_mask = os.path.join("co3d", "CO3DV2_DATASET_ROOT", "hydrant", hardcode, "masks", f"frame000001.png")
-            print("TARGET MASK")
-            print(target_mask)
-            print("--------------------------------")
-            print(first_frame_details['image_path'])
-            print(frame_detail['image_path'])
-            print("--------------------------------")
+            output_image_path = f"Predict/{folder_name}/{i+1}_pred.png"
+            os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
             
-            output_image_path = f"output_2/output_{sequence_name}_{frame_detail['frame_number']}.png"
             predict(
-                cond_image_path=first_frame_details['image_path'],
+                cond_image_path=os.path.join(folder_path, '000.png'),
                 elevation_first_degree = elevation_first,
                 azimuth_first_degree = azimuth_first,
                 radius_first =radius_first,
@@ -568,92 +540,42 @@ if __name__ == "__main__":
                 azimuth_in_degree= azimuth,
                 radius=radius,
                 output_image_path=output_image_path,
-                mask=target_mask
             )
-
-            print(f"Generated prediction for frame {frame_detail['frame_number']}. Calculating metrics...")
-            
-            generated_img_path = output_image_path
-            corresponding_img_path = frame_detail['image_path']
-            
-            generated_img = Image.open(generated_img_path).convert('RGB')
+                
+            generated_img = Image.open(output_image_path).convert('RGB')
+            corresponding_img_path = os.path.join(folder_path, f'0{i:02}.png')
             corresponding_img = Image.open(corresponding_img_path).convert('RGB')
             
-            #models = dict()
-            #models['carvekit'] = create_carvekit_interface()
+            preprocessed_corresponding_img = preprocess_image(models, corresponding_img, preprocess=True)
+            preprocessed_corresponding_img_2 = Image.fromarray((preprocessed_corresponding_img * 255).astype('uint8')).convert('RGB')
             
-            corresponding_mask = frame_detail['mask_path']
-            print("CORRES MASK")
-            print(corresponding_mask)
-            
-            preprocessed_corresponding_img_array = preprocess_image(models, corresponding_img, corresponding_mask, preprocess=True)
-            #preprocessed_corresponding_img_2 = Image.fromarray((preprocessed_corresponding_img_array * 255).astype('uint8')).convert('RGB')
-            
-            preprocessed_image_path = f"GT_2/preprocessed_{sequence_name}_{frame_detail['frame_number']}.png"
-            preprocessed_corresponding_img_array.save(preprocessed_image_path)
+            preprocessed_image_path = f"GT/{folder_name}/{i+1}_target.png"
+            os.makedirs(os.path.dirname(preprocessed_image_path), exist_ok=True)
+            preprocessed_corresponding_img_2.save(preprocessed_image_path)
             
             real_image_tensor = preprocess_image_for_inception_v3(corresponding_img)
             real_features = extract_features(inception_model, real_image_tensor)
             real_features_list.append(real_features.cpu().numpy())
             
-            generated_image_tensor = preprocess_image_for_inception_v3(preprocessed_corresponding_img_array)
+            generated_image_tensor = preprocess_image_for_inception_v3(preprocessed_corresponding_img_2)
             generated_features = extract_features(inception_model, generated_image_tensor)
             generated_features_list.append(generated_features.cpu().numpy())
-            #image = Image.open(cm)
-            #image.show()
-            #preprocessed_corresponding_img.show()
             
-            ssim_value, lpips_value = calculate_metrics(generated_img_path, preprocessed_corresponding_img_array)
-
+            ssim_value, lpips_value = calculate_metrics(output_image_path, preprocessed_image_path)
             ssim_values.append(ssim_value)
             lpips_values.append(lpips_value)
 
-            print(f"Frame {frame_detail['frame_number']} - SSIM: {ssim_value}, LPIPS: {lpips_value}")
+    ssim_mean = sum(ssim_values) / len(ssim_values) if ssim_values else 0
+    lpips_mean = sum(lpips_values) / len(lpips_values) if lpips_values else 0
+    print(f"Mean SSIM: {ssim_mean}, Mean LPIPS: {lpips_mean}")
+    
+    real_features_array = np.vstack(real_features_list)
+    generated_features_array = np.vstack(generated_features_list)
+    fid_score = calculate_fid(real_features_array, generated_features_array)
+    print(f"FID Score: {fid_score}")
 
-        ssim_mean = sum(ssim_values) / len(ssim_values) if ssim_values else 0
-        lpips_mean = sum(lpips_values) / len(lpips_values) if lpips_values else 0
+if __name__ == "__main__":
+    with open('folder_names.json', 'r') as f:
+        folder_names = json.load(f)
         
-        print(f"LENGTH SSIM ARRAY: {len(ssim_values)}")
-        print(f"LENGTH LPIPS ARRAY: {len(lpips_values)}")
-
-        print(f"Finished evaluation for sequence: {sequence_name}.")
-        print(f"Mean SSIM for {sequence_name}: {ssim_mean}")
-        print(f"Mean LPIPS for {sequence_name}: {lpips_mean}\n\n")
-        # Example for processing a batch of real and generated images
-        
-        real_features_array = np.vstack(real_features_list)
-        generated_features_array = np.vstack(generated_features_list)
-        print(f"Real features array shape: {real_features_array.shape}")
-        print(f"Generated features array shape: {generated_features_array.shape}")
-        
-        print(f"LENGTH Real features array shape: {len(real_features_array)}")
-        print(f"LENGTH Generated features array shape: {len(generated_features_array)}")
-        
-        fid_score = calculate_fid(real_features_array, generated_features_array)
-        print(f"FID Score: {fid_score}")
-        print(f"FID Score: {(fid_score / 1000)}")
-        
-        # Print the first few features of the real and generated arrays to inspect
-        print("First few features of real images:")
-        print(real_features_array[:5])
-
-        print("First few features of generated images:")
-        print(generated_features_array[:5])
-
-        # Additionally, print basic statistics of the arrays to get an idea of their distribution
-        print("Statistics of real features array:")
-        print(f"Mean: {np.mean(real_features_array, axis=0)[:5]}")  # Mean of the first few features
-        print(f"Std Dev: {np.std(real_features_array, axis=0)[:5]}")  # Std deviation of the first few features
-
-        print("Statistics of generated features array:")
-        print(f"Mean: {np.mean(generated_features_array, axis=0)[:5]}")  # Mean of the first few features
-        print(f"Std Dev: {np.std(generated_features_array, axis=0)[:5]}")  # Std deviation of the first few features
-
-        # To further understand the distribution, consider printing min and max values
-        print("Min and Max of real features array:")
-        print(f"Min: {np.min(real_features_array, axis=0)[:5]}")
-        print(f"Max: {np.max(real_features_array, axis=0)[:5]}")
-
-        print("Min and Max of generated features array:")
-        print(f"Min: {np.min(generated_features_array, axis=0)[:5]}")
-        print(f"Max: {np.max(generated_features_array, axis=0)[:5]}")
+    process_images_in_folders(folder_names)

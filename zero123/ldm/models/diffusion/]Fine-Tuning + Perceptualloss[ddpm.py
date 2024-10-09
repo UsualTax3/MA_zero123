@@ -44,7 +44,57 @@ def disabled_train(self, mode=True):
 def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
 
+class PerceptualLoss(nn.Module):
+    def __init__(self, resize=True):
+        super(PerceptualLoss, self).__init__()
+        self.vgg = models.vgg19(pretrained=True).features
+        self.vgg = self.vgg.eval()
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+        self.resize = resize
 
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+    def forward(self, img1, img2):
+        #print(f"Initial img1: shape={img1.shape}, min={img1.min().item()}, max={img1.max().item()}")
+        #print(f"Initial img2: shape={img2.shape}, min={img2.min().item()}, max={img2.max().item()}")
+
+        if self.resize:
+            img1 = F.interpolate(img1, mode='bilinear', size=(224, 224), align_corners=False)
+            img2 = F.interpolate(img2, mode='bilinear', size=(224, 224), align_corners=False)
+            #print(f"Resized img1: shape={img1.shape}, min={img1.min().item()}, max={img1.max().item()}")
+            #print(f"Resized img2: shape={img2.shape}, min={img2.min().item()}, max={img2.max().item()}")
+
+        img1 = self.preprocess_for_vgg(img1, "img1")
+        img2 = self.preprocess_for_vgg(img2, "img2")
+
+        features1 = self.get_features(img1, "img1")
+        features2 = self.get_features(img2, "img2")
+
+        perceptual_loss = sum(F.mse_loss(f1, f2) for f1, f2 in zip(features1, features2))
+        return perceptual_loss
+
+    def preprocess_for_vgg(self, img, img_name):
+        # Scale from [-1, 1] to [0, 1]
+        img = (img + 1) / 2
+        #print(f"Scaled {img_name} to [0, 1]: shape={img.shape}, min={img.min().item()}, max={img.max().item()}")
+
+        # Normalize to ImageNet statistics
+        img = self.normalize(img)
+        #print(f"Normalized {img_name} for VGG: shape={img.shape}, min={img.min().item()}, max={img.max().item()}")
+
+        return img
+
+    def get_features(self, x, img_name):
+        features = []
+        # Extract specific layers from VGG19 as features
+        for name, layer in self.vgg._modules.items():
+            x = layer(x)
+            if name in {'3', '8', '15', '22'}:  # Layers of interest for perceptual loss
+                features.append(x)
+                #print(f"Extracted features from layer {name} of {img_name}: shape={x.shape}, min={x.min().item()}, max={x.max().item()}")
+        return features
+        
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
@@ -1022,7 +1072,6 @@ class LatentDiffusion(DDPM):
 
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
-        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
             loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
             loss_dict.update({'logvar': self.logvar.data.mean()})
@@ -1034,6 +1083,36 @@ class LatentDiffusion(DDPM):
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
         loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
+
+        #x_reconstructed = self.decode_first_stage(model_output)
+        x_reconstructed = self.predict_start_from_noise(x_noisy, t=t, noise=model_output)
+        #print(f"x_reconstructed shape: {x_reconstructed.shape}, x_start shape: {x_start.shape}")
+
+        # Print the shape and range of x_start and x_reconstructed before decoding
+        #print(f"x_start (before decoding): shape={x_start.shape}, min={x_start.min().item()}, max={x_start.max().item()}")
+        #print(f"x_reconstructed (before decoding): shape={x_reconstructed.shape}, min={x_reconstructed.min().item()}, max={x_reconstructed.max().item()}")
+
+        # Decode if necessary
+        if x_start.shape[1] == 4:
+            x_start = self.decode_first_stage(x_start)
+            #print(f"Decoded x_start: shape={x_start.shape}, min={x_start.min().item()}, max={x_start.max().item()}")
+        if x_reconstructed.shape[1] == 4:
+            x_reconstructed = self.decode_first_stage(x_reconstructed)
+            #print(f"Decoded x_reconstructed: shape={x_reconstructed.shape}, min={x_reconstructed.min().item()}, max={x_reconstructed.max().item()}")
+
+        # Check if normalization is needed before perceptual loss
+        #print(f"Perceptual loss input - x_start: shape={x_start.shape}, min={x_start.min().item()}, max={x_start.max().item()}")
+        #print(f"Perceptual loss input - x_reconstructed: shape={x_reconstructed.shape}, min={x_reconstructed.min().item()}, max={x_reconstructed.max().item()}")
+
+        perceptual_loss = self.perceptual_loss(x_reconstructed, x_start)
+        weighted_perceptual_loss = self.perceptual_weight * perceptual_loss
+        loss += weighted_perceptual_loss
+        loss_dict.update({f'{prefix}/perceptual_loss': perceptual_loss})
+        loss_dict.update({f'{prefix}/weighted_perceptual_loss': weighted_perceptual_loss})
+
+        #print(f"Debug Info: x_start shape: {x_start.shape}, model_output shape: {model_output.shape}")
+        #print(f"x_noisy shape: {x_noisy.shape}, target shape: {target.shape}")
+        #print(f"loss_simple: {loss_simple.mean().item()}, perceptual_loss: {perceptual_loss.item()}")
 
         return loss, loss_dict
 
@@ -1398,19 +1477,19 @@ class LatentDiffusion(DDPM):
                 if isinstance(m, CrossAttention) and (n.endswith('attn1') or n.endswith('attn2')):
                     layer_params = sum(p.numel() for p in m.parameters())
                     total_params += layer_params
-                    trainable_params += sum(p.numel() for p in m.parameters() if p.requires_grad)
-                    params.extend(p for p in m.parameters() if p.requires_grad)
+                    trainable_params += layer_params
+                    params.extend(m.parameters())
         elif self.unet_trainable == "conv_in":
             print("Training only unet input conv layers")
             layer_params = sum(p.numel() for p in self.model.diffusion_model.input_blocks[0][0].parameters())
             total_params += layer_params
-            trainable_params += sum(p.numel() for p in self.model.diffusion_model.input_blocks[0][0].parameters() if p.requires_grad)
-            params = list(p for p in self.model.diffusion_model.input_blocks[0][0].parameters() if p.requires_grad)
+            trainable_params += layer_params
+            params = list(self.model.diffusion_model.input_blocks[0][0].parameters())
         elif self.unet_trainable is True or self.unet_trainable == "all":
             print("Training the full unet")
             total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            params = list(p for p in self.model.parameters() if p.requires_grad)
+            trainable_params = total_params
+            params = list(self.model.parameters())
         else:
             raise ValueError(f"Unrecognized setting for unet_trainable: {self.unet_trainable}")
 
@@ -1418,21 +1497,21 @@ class LatentDiffusion(DDPM):
             print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
             cond_params = sum(p.numel() for p in self.cond_stage_model.parameters())
             total_params += cond_params
-            trainable_params += sum(p.numel() for p in self.cond_stage_model.parameters() if p.requires_grad)
-            params.extend(list(p for p in self.cond_stage_model.parameters() if p.requires_grad))
-
+            trainable_params += cond_params
+            params.extend(list(self.cond_stage_model.parameters()))
+        
         if self.learn_logvar:
             print('Diffusion model optimizing logvar')
             logvar_params = self.logvar.numel()
             total_params += logvar_params
             trainable_params += logvar_params
             params.append(self.logvar)
-
+        
         if self.cc_projection is not None:
             cc_params = sum(p.numel() for p in self.cc_projection.parameters())
             total_params += cc_params
-            trainable_params += sum(p.numel() for p in self.cc_projection.parameters() if p.requires_grad)
-            params.extend(list(p for p in self.cc_projection.parameters() if p.requires_grad))
+            trainable_params += cc_params
+            params.extend(list(self.cc_projection.parameters()))
             print('========== optimizing for cc projection weight ==========')
 
         non_trainable_params = total_params - trainable_params
@@ -1446,9 +1525,9 @@ class LatentDiffusion(DDPM):
         print(non_trainable_params_str)
 
         param_groups = [{"params": params, "lr": lr}]
-
+        
         opt = torch.optim.AdamW(param_groups)
-
+        
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
             scheduler = instantiate_from_config(self.scheduler_config)

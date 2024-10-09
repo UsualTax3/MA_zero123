@@ -105,28 +105,35 @@ class DepthConsistencyLoss(nn.Module):
         super(DepthConsistencyLoss, self).__init__()
         self.device = device
 
+        # Load MiDaS model from torch.hub
         self.depth_estimator = torch.hub.load("intel-isl/MiDaS", model_type)
         self.depth_estimator.to(self.device)
         self.depth_estimator.eval()
 
+        # Transform to be applied to the input images
         self.transform = T.Compose([
-            T.Resize((384, 384)),
+            T.Resize((384, 384)),  # Adjust if your images need a different size
             T.Normalize(mean=[0.485, 0.456, 0.406],
                         std=[0.229, 0.224, 0.225]),
         ])
 
+        # Disable gradients for the depth estimation model
         for param in self.depth_estimator.parameters():
             param.requires_grad = False
 
     def forward(self, img1, img2):
+        # If img1 and img2 are already tensors, skip ToTensor, and only resize and normalize
         img1 = self.transform(img1).to(self.device)
         img2 = self.transform(img2).to(self.device)
 
+        # Ensure that the depth estimator is on the correct device
         self.depth_estimator = self.depth_estimator.to(self.device)
 
+        # Get depth maps for both images
         depth1 = self.depth_estimator(img1)
         depth2 = self.depth_estimator(img2)
 
+        # Compute the mean squared error between the depth maps
         return F.mse_loss(depth1, depth2)
         
 class CombinedLoss(nn.Module):

@@ -200,9 +200,9 @@ class CrossAttention(nn.Module):
         self.scale = dim_head ** -0.5
         self.heads = heads
         
-        self.to_q = lora.Linear(query_dim, inner_dim, bias=False, r=8)
-        self.to_k = lora.Linear(context_dim, inner_dim, bias=False, r=8)
-        self.to_v = lora.Linear(context_dim, inner_dim, bias=False, r=8) 
+        self.to_q = lora.Linear(query_dim, inner_dim, bias=False, r=2)
+        self.to_k = lora.Linear(context_dim, inner_dim, bias=False, r=2)
+        self.to_v = lora.Linear(context_dim, inner_dim, bias=False, r=2) 
 
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, query_dim),

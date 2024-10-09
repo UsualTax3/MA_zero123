@@ -1,0 +1,3 @@
+Total Parameters: 94,130,304
+Trainable Parameters: 94,130,304
+Non-trainable Parameters: 0

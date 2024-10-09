@@ -27,7 +27,6 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.modules.attention import CrossAttention
-import sys
 
 
 __conditioning_keys__ = {'concat': 'c_concat',
@@ -1388,66 +1387,46 @@ class LatentDiffusion(DDPM):
     def configure_optimizers(self):
         lr = self.learning_rate
         params = []
-
-        total_params = 0
-        trainable_params = 0
-
         if self.unet_trainable == "attn":
+            print()
+            print()
             print("Training only unet attention layers")
+            print()
+            print()
             for n, m in self.model.named_modules():
-                if isinstance(m, CrossAttention) and (n.endswith('attn1') or n.endswith('attn2')):
-                    layer_params = sum(p.numel() for p in m.parameters())
-                    total_params += layer_params
-                    trainable_params += sum(p.numel() for p in m.parameters() if p.requires_grad)
-                    params.extend(p for p in m.parameters() if p.requires_grad)
+                if isinstance(m, CrossAttention) and n.endswith('attn2'):
+                    print(f"Layer: {n}, Params: {[p.size() for p in m.parameters()]}")
+                    params.extend(m.parameters())
         elif self.unet_trainable == "conv_in":
             print("Training only unet input conv layers")
-            layer_params = sum(p.numel() for p in self.model.diffusion_model.input_blocks[0][0].parameters())
-            total_params += layer_params
-            trainable_params += sum(p.numel() for p in self.model.diffusion_model.input_blocks[0][0].parameters() if p.requires_grad)
-            params = list(p for p in self.model.diffusion_model.input_blocks[0][0].parameters() if p.requires_grad)
+            params = list(self.model.diffusion_model.input_blocks[0][0].parameters())
         elif self.unet_trainable is True or self.unet_trainable == "all":
             print("Training the full unet")
-            total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            params = list(p for p in self.model.parameters() if p.requires_grad)
+            params = list(self.model.parameters())
         else:
-            raise ValueError(f"Unrecognized setting for unet_trainable: {self.unet_trainable}")
+            raise ValueError(f"Unrecognised setting for unet_trainable: {self.unet_trainable}")
 
         if self.cond_stage_trainable:
             print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
-            cond_params = sum(p.numel() for p in self.cond_stage_model.parameters())
-            total_params += cond_params
-            trainable_params += sum(p.numel() for p in self.cond_stage_model.parameters() if p.requires_grad)
-            params.extend(list(p for p in self.cond_stage_model.parameters() if p.requires_grad))
-
+            params = params + list(self.cond_stage_model.parameters())
         if self.learn_logvar:
             print('Diffusion model optimizing logvar')
-            logvar_params = self.logvar.numel()
-            total_params += logvar_params
-            trainable_params += logvar_params
             params.append(self.logvar)
 
         if self.cc_projection is not None:
-            cc_params = sum(p.numel() for p in self.cc_projection.parameters())
-            total_params += cc_params
-            trainable_params += sum(p.numel() for p in self.cc_projection.parameters() if p.requires_grad)
-            params.extend(list(p for p in self.cc_projection.parameters() if p.requires_grad))
+            params = params + list(self.cc_projection.parameters())
             print('========== optimizing for cc projection weight ==========')
 
-        non_trainable_params = total_params - trainable_params
-
-        total_params_str = f"Total Parameters: {total_params:,}\n"
-        trainable_params_str = f"Trainable Parameters: {trainable_params:,}\n"
-        non_trainable_params_str = f"Non-trainable Parameters: {non_trainable_params:,}\n"
-            
-        print(total_params_str)
-        print(trainable_params_str)
-        print(non_trainable_params_str)
-
-        param_groups = [{"params": params, "lr": lr}]
-
-        opt = torch.optim.AdamW(param_groups)
+        print(self.model.parameters())
+        
+        opt = torch.optim.AdamW([{"params": self.model.parameters(), "lr": lr},
+                                {"params": self.cc_projection.parameters(), "lr": 10. * lr}], lr=lr) 
+                                
+        # Assuming `opt` is your AdamW optimizer instance
+        #for group_idx, param_group in enumerate(opt.param_groups):
+            #print(f"Parameter Group {group_idx}")
+            #for param_idx, param in enumerate(param_group['params']):
+                #print(f"\tParam {param_idx}: shape = {param.size()}, requires_grad = {param.requires_grad}")
 
         if self.use_scheduler:
             assert 'target' in self.scheduler_config
@@ -1459,10 +1438,8 @@ class LatentDiffusion(DDPM):
                     'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
                     'interval': 'step',
                     'frequency': 1
-                }
-            ]
+                }]
             return [opt], scheduler
-
         return opt
 
     @torch.no_grad()

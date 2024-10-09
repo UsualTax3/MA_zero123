@@ -180,69 +180,71 @@ from PIL import Image
 import torch
 import matplotlib.pyplot as plt
 
+# Custom transform function
 def custom_transform(x):
-    return rearrange(x, 'c h w -> h w c')
+    return rearrange(x * 2. - 1., 'c h w -> h w c')
 
+# NPY decoder function
 def npy_decoder(value):
     assert isinstance(value, bytes)
     return np.frombuffer(value, dtype=np.float64)
 
+# PNG decoder function
 def png_decoder(value):
     assert isinstance(value, bytes)
-    return imageio.imread(io.BytesIO(value)) 
+    return imageio.imread(io.BytesIO(value))
 
+# Function to load image from numpy array
 def load_im_from_array(img_array, color):
-    if img_array.shape[2] == 4:  
-        alpha_channel = img_array[:, :, 3]
-        rgb_channels = img_array[:, :, :3]
-        mask = alpha_channel == 0.0
-        rgb_channels[mask] = color[:3]
-        img_array = rgb_channels  
-    img = Image.fromarray(np.uint8(img_array * 255.0))
+    img_array[img_array[:, :, -1] == 0.] = color
+    img = Image.fromarray(np.uint8(img_array[:, :, :3] * 255.))
     return img
 
 # Function to assemble frames
 def assemble_frames(sample):
     data = {}
     total_view = 12
-    color = [1.0, 1.0, 1.0]
+    color = [1., 1., 1., 1.]
 
     index_target, index_cond = random.sample(range(total_view), 2)
     try:
         target_im_array = png_decoder(sample[f"{index_target:03d}.png"])
         cond_im_array = png_decoder(sample[f"{index_cond:03d}.png"])
-
-        if target_im_array.max() > 1.0:
-            target_im_array = target_im_array.astype(np.float64) / 255.0
-        if cond_im_array.max() > 1.0:
-            cond_im_array = cond_im_array.astype(np.float64) / 255.0
-
-        target_im = load_im_from_array(target_im_array, color).convert('RGB')
-        cond_im = load_im_from_array(cond_im_array, color).convert('RGB')
-
+        
+        target_im = load_im_from_array(target_im_array, color)
+        cond_im = load_im_from_array(cond_im_array, color)
+        
         target_RT_raw = npy_decoder(sample[f"{index_target:03d}.npy"])
         cond_RT_raw = npy_decoder(sample[f"{index_cond:03d}.npy"])
+        
+        #print(f"Raw target_RT array: {target_RT_raw}, Shape: {target_RT_raw.shape}")
+        #print(f"Raw cond_RT array: {cond_RT_raw}, Shape: {cond_RT_raw.shape}")
 
         target_RT = target_RT_raw.reshape(3, 4)
         cond_RT = cond_RT_raw.reshape(3, 4)
+        
+        #print(f"Selected indices - target: {index_target}, cond: {index_cond}")
+        #print(f"target_RT contents: {target_RT}")
+        #print(f"cond_RT contents: {cond_RT}")
 
         if target_im is None or cond_im is None:
             raise ValueError("Image loading failed")
 
+        print(f"Original target image shape: {target_im_array.shape}")
+        print(f"Original cond image shape: {cond_im_array.shape}")
+
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize(256),
             torchvision.transforms.ToTensor(),
+            custom_transform
         ])
-
+        
+        # Apply custom transformations
         target_im = transform(target_im)
         cond_im = transform(cond_im)
-
-        # Apply custom transformations (if needed)
-        target_im = custom_transform(target_im)
-        cond_im = custom_transform(cond_im)
         
-        target_im = target_im * 2 - 1  # Scale to [-1, 1]
-        cond_im = cond_im * 2 - 1  # Scale to [-1, 1]
+        print(f"Transformed target image shape: {target_im.shape}")
+        print(f"Transformed cond image shape: {cond_im.shape}")
         
     except Exception as e:
         print(f"Error assembling frames: {e}")

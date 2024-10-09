@@ -241,9 +241,6 @@ def assemble_frames(sample):
         target_im = custom_transform(target_im)
         cond_im = custom_transform(cond_im)
         
-        target_im = target_im * 2 - 1  # Scale to [-1, 1]
-        cond_im = cond_im * 2 - 1  # Scale to [-1, 1]
-        
     except Exception as e:
         print(f"Error assembling frames: {e}")
         return None

@@ -1393,9 +1393,9 @@ class LatentDiffusion(DDPM):
         trainable_params = 0
 
         if self.unet_trainable == "attn":
-            print("Training only unet attention layers")
+            print("Training only unet attention layers with 'lora' and 'to_out.0' layers")
             for n, m in self.model.named_modules():
-                if isinstance(m, CrossAttention) and (n.endswith('attn1') or n.endswith('attn2')):
+                if isinstance(m, CrossAttention) and ("lora" in n or "to_out.0.weight" in n or "to_out.0.bias" in n):
                     layer_params = sum(p.numel() for p in m.parameters())
                     total_params += layer_params
                     trainable_params += sum(p.numel() for p in m.parameters() if p.requires_grad)
@@ -1440,7 +1440,7 @@ class LatentDiffusion(DDPM):
         total_params_str = f"Total Parameters: {total_params:,}\n"
         trainable_params_str = f"Trainable Parameters: {trainable_params:,}\n"
         non_trainable_params_str = f"Non-trainable Parameters: {non_trainable_params:,}\n"
-            
+
         print(total_params_str)
         print(trainable_params_str)
         print(non_trainable_params_str)

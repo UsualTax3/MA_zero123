@@ -11,16 +11,16 @@ This repository contains the code and instructions associated with the Master's 
 
 To train the model using the provided configuration, run the following command:
 
-\`\`\`bash
+```bash
 python main.py -t \\
-  --base configs/sd-objaverse-finetune-c_concat-256.yaml \\
-  --gpus 0,1,2,3 \\
-  --scale_lr False \\
-  --num_nodes 1 \\
-  --seed 42 \\
-  --check_val_every_n_epoch 10 \\
-  --finetune_from sd-image-conditioned-v2.ckpt
-\`\`\`
+    --base configs/sd-objaverse-finetune-c_concat-256.yaml \\
+    --gpus 0,1,2,3 \\
+    --scale_lr False \\
+    --num_nodes 1 \\
+    --seed 42 \\
+    --check_val_every_n_epoch 10 \\
+    --finetune_from sd-image-conditioned-v2.ckpt
+```
 
 ### Explanation of Key Arguments:
 
